@@ -3,50 +3,27 @@ library(tidyverse)
 library(tidytext)
 library(SnowballC)
 library(wordcloud2)
+source("./Functions/cleanse.comments.R")
 
 #data processing
-df <- readRDS("ActuaryUK.all.threads.rds")
+df <- readRDS("./Data/ActuaryUK.all.threads.rds")
 df$comments$comment <- str_to_lower(df$comments$comment)
 comments <- data.frame(comments = df$comments$comment, date=df$comments$date)
 
-# getting a dataframe of unnested words and the date(s) they appear
-word.df <- comments %>% unnest_tokens(.,token = "words",output="word",input=comments)
-word.df$word <- str_remove_all(word.df$word,"'")
-word.df$month <- format(as.Date(word.df$date), "%Y-%m")
-word.df$year <- format(as.Date(word.df$date), "%Y")
-
-# remove stop words
-word.df <- anti_join(word.df,stop_words)
-
-# apply wordStem() function to words$word
-# this will give the stem of a word rather than actual word... allows variants to be joined such as plurals
-word.df$stem <- SnowballC::wordStem(word.df$word)
-
-# create a word.stem.map
-# this picks the most common word found in the data for each stem type in the data
-# allows us to convert stem back to a single word as this is more intuitive to understand than a stem
-word.stem.map <- word.df %>%
-  group_by(word, stem) %>%
-  summarise(count=n()) %>%
-  group_by(stem) %>%
-  filter(count==max(count)) %>%
-  ungroup() %>%
-  select(word, stem)
-
+# cleanse comments using word stemming to rename similar words to a single representative word
+word.df <- cleanse.comments(comments)
 
 # find frequency of each stem in each month
 # filter out numbers, as well as exam names (these will be analysed in a separate part)
 # convert final table from stem to word by joining on our word.stem.map we created in previous section
 word.freq.month <- word.df %>%
-  select(-word) %>%
-  filter(str_detect(stem, pattern = "[a-z]")) %>%
-  group_by(stem, month) %>%
+  filter(str_detect(word, pattern = "[a-z]")) %>%
+  group_by(word, month) %>%
   summarise(count=n()) %>%
   ungroup() %>%
   arrange(desc(count)) %>%
-  filter(!str_detect(stem,pattern = "^c[bmsp]\\d$") & !str_detect(stem,pattern = "^s[ap]\\d$")) %>%
-  left_join(word.stem.map) %>%
-  select(word, month, freq=count)
+  filter(!str_detect(word,pattern = "^c[bmsp]\\d$") & !str_detect(word,pattern = "^s[ap]\\d$")) %>%
+  rename(freq=count)
 
 # use term frequency inverse document frequency (bind_tf_idf) scores to determine which words appeared in unusually high
   # amounts for each month
@@ -80,11 +57,25 @@ word.freq.month <- word.df %>%
 
 
 # apply our word.freq table to a wordcloud
-color_palette <- c("grey", "blue")
-wordcloud2(word.freq[1:50,],
-           #color = sentiment,
+color_palette <- c("#FF8b60", "#9494FF") # these are the upvote/downvote colours of reddit
+wc <- wordcloud2(word.freq[1:50,],
            color=rep_len(c(color_palette), nrow(word.freq)),
            size = .75)
+
+
+# SAVE wordcloud...
+
+# install webshot
+library(webshot)
+webshot::install_phantomjs()
+
+# save it in html
+library("htmlwidgets")
+saveWidget(wc,"wc.html",selfcontained = F)
+
+# and in png or pdf
+webshot("wc.html","wc.png", delay =5, vwidth = 480, vheight=480)
+
 
 
 #top comment
