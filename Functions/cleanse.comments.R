@@ -1,3 +1,7 @@
+library(tidyverse)
+library(tidytext)
+library(SnowballC)
+
 cleanse.comments <- function(comments) {
 
   # getting a dataframe of unnested words and the date(s) they appear

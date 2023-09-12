@@ -1,14 +1,17 @@
+library(tidyverse)
+library(patchwork)
 
+source("./Functions/cleanse.comments.R")
 
 #data processing - UK
-act.uk <- readRDS("./Data/ActuaryUK.all.threads.rds")
-act.uk$comments$comment <- str_to_lower(act.uk$comments$comment)
-comments.uk <- data.frame(comments = act.uk$comments$comment, date=act.uk$comments$date)
+act.uk <- readRDS("./Data/ActuaryUK.all.comments.rds")
+act.uk$comment <- str_to_lower(act.uk$comment)
+comments.uk <- data.frame(comments = act.uk$comment, date=act.uk$date, score=act.uk$score)
 
 #data processing - US
-act.us <- readRDS("./Data/Actuary.all.threads.rds")
-act.us$comments$comment <- str_to_lower(act.us$comments$comment)
-comments.us <- data.frame(comments = act.us$comments$comment, date=act.us$comments$date)
+act.us <- readRDS("./Data/Actuary.all.comments.rds")
+act.us$comment <- str_to_lower(act.us$comment)
+comments.us <- data.frame(comments = act.us$comment, date=act.us$date, score=act.us$score)
 
 # cleanse comments using word stemming to rename similar words to a single representative word
 word.act.uk <- cleanse.comments(comments.uk)
@@ -33,47 +36,76 @@ return(word.freq)
 word.freq.uk <- group.words(word.act.uk)
 word.freq.us <- group.words(word.act.us)
 
-total.uk <- word.freq.uk$freq %>% sum()
-total.us <- word.freq.us$freq %>% sum()
-words.per.n <- 10000
-
-word.freq.uk <- word.freq.uk %>% mutate(wpn = freq * words.per.n / total.uk)
-word.freq.us <- word.freq.us %>% mutate(wpn = freq * words.per.n / total.us)
-
-comparing.act <- left_join(word.freq.uk, word.freq.us, by = "stem") %>%
-  mutate(diff.wpn = wpn.x - wpn.y) %>%
-  mutate(diff.rank = rank.x - rank.y) %>%
-  filter(pmin(rank.x,rank.y)<=50) %>%
-  arrange(diff.rank)
-View(comparing.act)
-
-comparing.act$word.x <- factor(comparing.act$word.x, levels = comparing.act$word.x)
-
-ggplot(comparing.act, aes(x=word.x,y=diff.rank)) +
-  geom_col() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0))
-
-#
-# us.vs.uk <-
-# rbind(
-#   data.frame(stem = word.freq.uk$stem, subreddit = "ActuaryUK", freq = word.freq.uk$freq),
-#   data.frame(stem = word.freq.us$stem, subreddit = "Actuary", freq = word.freq.us$freq)
-# )
-#
-# differences <- us.vs.uk %>%
-#   bind_tf_idf(stem, subreddit, freq) %>%
-#   arrange(desc(tf_idf)) %>%
-#   filter(!str_detect(stem, pattern = ".\\d"),
-#          freq>100)
-# View(differences)
+all.words <- rbind(
+data.frame(word.freq.uk, subreddit = "ActuaryUK"),
+data.frame(word.freq.us, subreddit = "Actuary")
+)
 
 
+# list of exams - these are removed from analysis as they would top the TF-IDF tables and this is not an interesting result
+us.exams <- c("P","FM","IFM","LTAM","MAS-I","MAS-II","MFE","CBT","SRM","STAM") %>% str_to_lower()
+uk.exams<-c("CM1","CM2","CS1","CS2","CB1","CB2","CB3","CP1","CP2","CP3","SA\\d","SP\\d") %>% str_to_lower()
+
+is.exam.string <- c(map(uk.exams, function(x) str_detect(all.words$stem, x)),
+                    map(us.exams, function(x) str_detect(all.words$stem, x))) %>% reduce(`|`)
+all.words.minus.exams <- filter(all.words, !is.exam.string) %>% filter(!str_detect(string=word,pattern="\\d"))
+
+# also removing the following. These are uninteresting results for TF-IDF... either USA spelling variants not use by the UK or websites.
+manual.removals <- c("favorite","color","mom","labor","soa.org","actuaries.org.uk","www.soa.org")
+
+tf.idf.reddit <- all.words.minus.exams %>%
+  bind_tf_idf(stem, subreddit, freq) %>%
+  arrange(desc(tf_idf)) %>%
+  filter(!word %in% manual.removals)
+
+tf_idf_plot <- function(data,
+                        subreddit.filter,
+                        n.bars,
+                        fill.colour) {
+  ggplot(data %>% filter(subreddit==subreddit.filter) %>% head(n.bars),
+                  aes(x=fct_reorder(word,tf_idf,.desc=T),
+                      y=tf_idf)) +
+  geom_col(fill=fill.colour, show.legend = TRUE) +
+  labs(y="TF-IDF", x="Word", title=paste("r/",subreddit.filter, sep="")) +
+  scale_fill_discrete(name=subreddit.filter) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.y = element_blank())
+}
+
+us.plot <- tf_idf_plot(data = tf.idf.reddit, subreddit.filter = "Actuary", n.bars = 15 , fill.colour = "dodgerblue2")
+uk.plot <- tf_idf_plot(data = tf.idf.reddit, subreddit.filter = "ActuaryUK", n.bars = 15 , fill.colour = "firebrick1")
 
 
+pp.ukus <- uk.plot / us.plot
+
+
+ggsave("pp.ukus.jpg")
+
+
+
+
+
+
+# sentiments
+if (FALSE) {
+uk.sent <- word.act.uk %>%
+  left_join(get_sentiments()) %>%
+  group_by(sentiment) %>%
+  summarise(score=sum(score))
+
+us.sent <- word.act.us %>%
+  left_join(get_sentiments(), relationship = "many-to-many") %>%
+  group_by(sentiment) %>%
+  summarise(score=sum(score))
+us.sent$score / sum(us.sent$score)
+
+uk.sent$score / sum(uk.sent$score)
+}
 
 
 
 
 #top comment
-top.comment <- act.us$comments %>% arrange(desc(score)) %>% head(5) %>% .$comment
-
+top.comment <- act.uk %>% arrange(desc(score)) %>% head(1) %>% .$comment
+act.uk %>% arrange(desc(score)) %>% head(1) %>% .$comment
